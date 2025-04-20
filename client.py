@@ -156,7 +156,7 @@ class MCPClient:
             # Append final response text
             final_response = response.choices[0].message.content or ""
             if final_response:
-                print("final response: ", final_response)
+                
                 final_text.append(final_response)
 
         return " ".join(final_text)

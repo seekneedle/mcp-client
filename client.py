@@ -2,6 +2,8 @@ import asyncio
 from typing import Optional
 from contextlib import AsyncExitStack
 import json
+import httpx
+import uuid
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -22,6 +24,7 @@ class MCPClient:
             api_key=os.getenv("DEEPSEEK_API_KEY"),
             base_url="https://api.deepseek.com"
         )
+        self.remote_session = None
 
     async def connect_to_server(self, server_script_path: str):
         """Connect to an MCP server
@@ -51,6 +54,109 @@ class MCPClient:
         response = await self.session.list_tools()
         tools = response.tools
         print("\nConnected to server with tools:", [tool.name for tool in tools])
+
+    async def connect_to_remote_server(self, server_url: str, api_key: str = None):
+        """Connect to a remote MCP server using Server-Sent Events (SSE)
+        
+        Args:
+            server_url: Full URL of the remote MCP server
+            api_key: Optional API key for authentication
+        """
+        # Prepare headers
+        headers = {
+            "Accept": "text/event-stream",
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive"
+        }
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        # Create an async HTTP client
+        async with httpx.AsyncClient() as client:
+            try:
+                # Establish SSE connection
+                async with client.stream('GET', server_url, headers=headers) as response:
+                    response.raise_for_status()
+                    
+                    # Initialize remote session
+                    self.remote_session = {
+                        'url': server_url,
+                        'connection': response
+                    }
+                    
+                    print(f"\nConnected to remote MCP server: {server_url}")
+                    
+                    # List available tools
+                    tools_response = await self.list_remote_tools()
+                    print("\nAvailable remote tools:", [tool['name'] for tool in tools_response])
+                    
+                    return self.remote_session
+
+            except httpx.HTTPStatusError as e:
+                print(f"Failed to connect to remote server: {e}")
+                raise
+
+    async def list_remote_tools(self):
+        """List tools available on the remote MCP server"""
+        if not self.remote_session:
+            raise RuntimeError("Not connected to a remote server")
+        
+        # Prepare request to list tools
+        list_tools_request = {
+            "type": "list_tools",
+            "request_id": str(uuid.uuid4())
+        }
+        
+        # Send list tools request
+        await self.send_remote_request(list_tools_request)
+        
+        # Wait for and return tools response
+        return await self.receive_remote_response()
+
+    async def send_remote_request(self, request):
+        """Send a request to the remote MCP server"""
+        if not self.remote_session:
+            raise RuntimeError("Not connected to a remote server")
+        
+        # Implement request sending logic
+        # This might involve sending the request through SSE or a specific endpoint
+        pass
+
+    async def receive_remote_response(self):
+        """Receive a response from the remote MCP server"""
+        if not self.remote_session:
+            raise RuntimeError("Not connected to a remote server")
+        
+        # Implement response receiving logic
+        # Parse SSE events and extract the relevant response
+        async for event in self.remote_session['connection'].aiter_text():
+            if event.startswith('data:'):
+                try:
+                    response = json.loads(event[5:].strip())
+                    return response
+                except json.JSONDecodeError:
+                    print(f"Failed to parse response: {event}")
+        
+        raise RuntimeError("No response received")
+
+    async def call_remote_tool(self, tool_name, tool_args):
+        """Call a tool on the remote MCP server"""
+        if not self.remote_session:
+            raise RuntimeError("Not connected to a remote server")
+        
+        # Prepare tool call request
+        tool_request = {
+            "type": "call_tool",
+            "tool_name": tool_name,
+            "tool_args": tool_args,
+            "request_id": str(uuid.uuid4())
+        }
+        
+        # Send tool call request
+        await self.send_remote_request(tool_request)
+        
+        # Wait for and return tool call response
+        return await self.receive_remote_response()
 
     async def process_query(self, query: str) -> str:
         """Process a query using DeepSeek and available tools"""
